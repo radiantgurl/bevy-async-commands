@@ -13,15 +13,16 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+use async_channel::bounded;
 use bevy_app::{App, Plugin};
 use bevy_async_ecs::{AsyncEcsPlugin, AsyncWorld};
 use bevy_ecs::{
     resource::Resource,
-    system::Commands,
+    system::{Command, Commands},
     world::{FromWorld, World},
 };
 use bevy_tasks::{
-    AsyncComputeTaskPool, Task, futures::check_ready, tick_global_task_pools_on_main_thread,
+    AsyncComputeTaskPool, Task, futures::check_ready, tick_global_task_pools_on_main_thread
 };
 use event_listener_strategy::event_listener::Event;
 
@@ -94,14 +95,16 @@ impl<'w, 's> Drop for AsyncCommands<'w, 's> {
 
 trait AsyncWorldCommandExtInternal: Send + Sync {
     fn commands_internal<'w: 's, 's>(
-        &mut self,
+        &self,
     ) -> impl Future<Output = AsyncCommands<'w, 's>> + Send;
 }
 
 /// Use this to extend the methods on the [`AsyncWorld`](https://docs.rs/bevy-async-ecs/latest/bevy_async_ecs/struct.AsyncWorld.html).
 pub trait AsyncWorldCommandExt: Send + Sync {
     /// Request an [`AsyncCommands`](https://docs.rs/bevy-async-commands/latest/bevy_async_commands/struct.AsyncCommands.html) instance. This will fetch a [`Commands`](https://docs.rs/bevy_ecs/latest/bevy_ecs/system/struct.Commands.html) instance, freezing the main thread while it exists.
-    fn commands<'w: 's, 's>(&mut self) -> impl Future<Output = AsyncCommands<'w, 's>> + Send;
+    fn commands<'w: 's, 's>(&self) -> impl Future<Output = AsyncCommands<'w, 's>> + Send;
+    /// Queue a [`Command`](https://docs.rs/bevy_ecs/latest/bevy_ecs/system/struct.Command.html) to be ran and await on its output.
+    fn apply2<R: 'static + Send>(&self, command: impl Command<R>) -> impl Future<Output = R> + 'static;
 }
 
 #[cfg(not(debug_assertions))]
@@ -133,7 +136,7 @@ impl AsyncWorldCommandExtInternal for AsyncWorld {
 
 #[cfg(debug_assertions)]
 impl AsyncWorldCommandExtInternal for AsyncWorld {
-    async fn commands_internal<'w: 's, 's>(&mut self) -> AsyncCommands<'w, 's> {
+    async fn commands_internal<'w: 's, 's>(&self) -> AsyncCommands<'w, 's> {
         use std::sync::atomic::Ordering::Relaxed;
 
         let (s, r) = async_channel::bounded(1);
@@ -170,11 +173,22 @@ impl AsyncWorldCommandExtInternal for AsyncWorld {
 }
 
 impl AsyncWorldCommandExt for AsyncWorld {
-    fn commands<'w: 's, 's>(&mut self) -> impl Future<Output = AsyncCommands<'w, 's>> + Send {
+    fn commands<'w: 's, 's>(&self) -> impl Future<Output = AsyncCommands<'w, 's>> + Send {
         self.commands_internal()
     }
+    
+    fn apply2<R: 'static + Send>(&self, command: impl Command<R>) -> impl Future<Output = R> + 'static {
+        let (s,r) = bounded(1);
+        let clone = self.clone();
+        async move {
+            clone.apply(move |w: &mut World| {
+                s.try_send(command.apply(w)).unwrap();
+            }).await;
+            r.recv().await.unwrap()
+        }
+    }
 }
-/// Use this to acquire an async context from [`Commands`](https://docs.rs/bevy_ecs/latest/bevy_ecs/system/struct.Commands.html)
+/// Use this to extend the methods on [`Commands`](https://docs.rs/bevy_ecs/latest/bevy_ecs/system/struct.Commands.html)
 pub trait AsyncCommandsExt: Send + Sync {
     /// Request an [`AsyncWorld`](https://docs.rs/bevy-async-ecs/latest/bevy_async_ecs/struct.AsyncWorld.html) instance. This will not pause the main thread.
     fn async_world(&mut self) -> Task<AsyncWorld>;
@@ -194,7 +208,7 @@ impl<'w, 's> AsyncCommandsExt for Commands<'w, 's> {
     fn async_commands<'s_1>(mut self) -> impl Future<Output = AsyncCommands<'static, 's_1>> + Send {
         let task = self.async_world();
         AsyncComputeTaskPool::get().spawn(async move {
-            let mut w = task.await;
+            let w = task.await;
             w.commands().await
         })
     }
@@ -208,7 +222,7 @@ mod tests {
     use bevy::MinimalPlugins;
     use bevy_app::App;
     use bevy_async_ecs::AsyncWorld;
-    use bevy_ecs::{component::Component, system::Commands, world::FromWorld};
+    use bevy_ecs::{component::Component, system::Commands, world::{FromWorld, World}};
     use bevy_tasks::AsyncComputeTaskPool;
 
     #[derive(Component, Clone, Copy)]
@@ -222,7 +236,7 @@ mod tests {
         let async_world = c.async_world();
         AsyncComputeTaskPool::get()
             .spawn(async move {
-                let mut world = async_world.await;
+                let world = async_world.await;
                 let mut c = world.commands().await;
                 c.spawn((EntityPush(42),));
                 println!("command pushed");
@@ -234,7 +248,7 @@ mod tests {
     fn generic() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, BevyAsyncCommandsPlugin));
-        let mut async_world = AsyncWorld::from_world(app.world_mut());
+        let async_world = AsyncWorld::from_world(app.world_mut());
         AsyncComputeTaskPool::get()
             .spawn(async move {
                 let mut commands = async_world.commands().await;
@@ -242,6 +256,30 @@ mod tests {
                 commands.run_system_cached(test_async_system);
             })
             .detach();
+        let d = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
+        while Instant::now() < d {
+            app.update();
+        }
+        let mut data = app.world_mut().query::<&EntityPush>();
+        let r = data.single(app.world()).unwrap();
+        println!("{}", r.0);
+    }
+
+    fn system_test_return(mut c: Commands) {
+        let async_world_fut = c.async_world();
+        AsyncComputeTaskPool::get().spawn(async move {
+            let async_world = async_world_fut.await;
+            async_world.apply2(|w: &mut World| {
+                w.spawn(EntityPush(42));
+            }).await;
+        }).detach();
+    }
+
+    #[test]
+    fn test_return() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, BevyAsyncCommandsPlugin));
+        app.world_mut().run_system_cached(system_test_return).unwrap();
         let d = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
         while Instant::now() < d {
             app.update();
