@@ -1,7 +1,7 @@
 #[cfg(debug_assertions)]
 use std::sync::{Arc, atomic::AtomicBool};
 
-use std::{future::Future, mem::transmute, ops::{Deref, DerefMut}, marker::PhantomData};
+use std::{future::Future, mem::transmute, ops::{Deref, DerefMut}};
 
 use bevy_app::{App, Plugin};
 use bevy_async_ecs::{AsyncEcsPlugin, AsyncWorld};
@@ -16,9 +16,9 @@ pub struct BevyAsyncCommandsPlugin;
 pub struct BevyAsyncWorld(pub AsyncWorld);
 
 #[cfg(not(debug_assertions))]
-pub struct AsyncCommands<'w: 's + 'aw, 's, 'aw>(Option<Commands<'w, 's>>, Option<Event>, PhantomData<&'aw mut AsyncWorld>);
+pub struct AsyncCommands<'w: 's, 's>(Option<Commands<'w, 's>>, Option<Event>);
 #[cfg(debug_assertions)]
-pub struct AsyncCommands<'w: 's + 'aw, 's, 'aw>(Option<Commands<'w, 's>>, Option<Event>, Arc<AtomicBool>, PhantomData<&'aw mut AsyncWorld>);
+pub struct AsyncCommands<'w: 's, 's>(Option<Commands<'w, 's>>, Option<Event>, Arc<AtomicBool>);
 
 impl Plugin for BevyAsyncCommandsPlugin {
     fn build(&self, app: &mut App) {
@@ -29,13 +29,13 @@ impl Plugin for BevyAsyncCommandsPlugin {
     }
 }
 
-impl<'w: 's, 's, 'aw> DerefMut for AsyncCommands<'w, 's, 'aw> {
+impl<'w: 's, 's> DerefMut for AsyncCommands<'w, 's> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.0.as_mut().unwrap()
     }
 }
 
-impl<'w: 's, 's, 'aw> Deref for AsyncCommands<'w, 's, 'aw> {
+impl<'w: 's, 's> Deref for AsyncCommands<'w, 's> {
     type Target = Commands<'w, 's>;
 
     fn deref(&self) -> &Self::Target {
@@ -44,7 +44,7 @@ impl<'w: 's, 's, 'aw> Deref for AsyncCommands<'w, 's, 'aw> {
 }
 
 #[cfg(not(debug_assertions))]
-impl<'w, 's, 'aw> Drop for AsyncCommands<'w, 's, 'aw> {
+impl<'w, 's> Drop for AsyncCommands<'w, 's> {
     fn drop(&mut self) {
         drop(self.0.take());
         if let Some(ev) = self.1.take() {
@@ -53,7 +53,7 @@ impl<'w, 's, 'aw> Drop for AsyncCommands<'w, 's, 'aw> {
     }
 }
 #[cfg(debug_assertions)]
-impl<'w, 's, 'aw> Drop for AsyncCommands<'w, 's, 'aw> {
+impl<'w, 's> Drop for AsyncCommands<'w, 's> {
     fn drop(&mut self) {
         use std::sync::atomic::Ordering::Relaxed;
 
@@ -66,16 +66,16 @@ impl<'w, 's, 'aw> Drop for AsyncCommands<'w, 's, 'aw> {
 }
 
 trait AsyncWorldCommandExtInternal: Send + Sync {
-    fn commands_internal<'w: 's + 'aw, 's, 'aw>(&mut self) -> impl Future<Output = AsyncCommands<'w, 's, 'aw>> + Send;
+    fn commands_internal<'w: 's, 's>(&mut self) -> impl Future<Output = AsyncCommands<'w, 's>> + Send;
 }
 
 pub trait AsyncWorldCommandExt: Send + Sync {
-    fn commands<'w: 's + 'aw, 's, 'aw>(&'aw mut self) -> impl Future<Output = AsyncCommands<'w, 's, 'aw>> + Send;
+    fn commands<'w: 's, 's>(&mut self) -> impl Future<Output = AsyncCommands<'w, 's>> + Send;
 }
 
 #[cfg(not(debug_assertions))]
 impl AsyncWorldCommandExtInternal for AsyncWorld {
-    async fn commands_internal<'w: 's, 's, 'aw>(&mut self) -> AsyncCommands<'w, 's, 'aw> {
+    async fn commands_internal<'w: 's, 's>(&mut self) -> AsyncCommands<'w, 's> {
         let (s,r) = async_channel::bounded(1);
         let ev = Event::new();
         let mut listener = ev.listen();
@@ -95,13 +95,13 @@ impl AsyncWorldCommandExtInternal for AsyncWorld {
 
         }).await;
         let commands: Commands<'w, 's> = r.recv().await.unwrap();
-        AsyncCommands::<'_, '_, '_>(Some(commands), Some(ev), PhantomData::default())
+        AsyncCommands::<'_, '_>(Some(commands), Some(ev))
     }
 }
 
 #[cfg(debug_assertions)]
 impl AsyncWorldCommandExtInternal for AsyncWorld {
-    async fn commands_internal<'w: 's + 'aw, 's, 'aw>(&mut self) -> AsyncCommands<'w, 's, 'aw> {
+    async fn commands_internal<'w: 's, 's>(&mut self) -> AsyncCommands<'w, 's> {
         use std::sync::atomic::Ordering::Relaxed;
 
         let (s,r) = async_channel::bounded(1);
@@ -129,23 +129,22 @@ impl AsyncWorldCommandExtInternal for AsyncWorld {
 
         }).await;
         let commands: Commands<'w, 's> = r.recv().await.unwrap();
-        AsyncCommands::<'_, '_, '_>(Some(commands), Some(ev), flag, PhantomData::default())
+        AsyncCommands::<'_, '_>(Some(commands), Some(ev), flag)
     }
 }
 
 impl AsyncWorldCommandExt for AsyncWorld {
-    fn commands<'w: 's + 'aw, 's, 'aw>(&'aw mut self) -> impl Future<Output = AsyncCommands<'w, 's, 'aw>> + Send {
+    fn commands<'w: 's, 's>(&mut self) -> impl Future<Output = AsyncCommands<'w, 's>> + Send {
         self.commands_internal()
     }
 }
 
-pub trait AsyncCommandsExt<'w, 's>: Send + Sync {
+pub trait AsyncCommandsExt: Send + Sync {
     fn async_world(&mut self) -> Task<AsyncWorld>;
-    // fn async_commands<'ns, 'aw>(&mut self) -> AsyncCommands<'w, 'ns, 'aw> where 's: 'ns, 'w: 'aw;
-    fn async_commands(self) -> AsyncCommands<'w, 's, 's>;
+    fn async_commands<'s>(self) -> impl Future<Output=AsyncCommands<'static, 's>> + Send;
 }
 
-impl<'w, 's> AsyncCommandsExt<'w, 's> for Commands<'w, 's> {
+impl<'w, 's> AsyncCommandsExt for Commands<'w, 's> {
     fn async_world(&mut self) -> Task<AsyncWorld> {
         let (s, r) = async_channel::bounded(1);
         self.queue(move |w: &mut World| {
@@ -155,41 +154,40 @@ impl<'w, 's> AsyncCommandsExt<'w, 's> for Commands<'w, 's> {
             r.recv().await.unwrap()
         })
     }
-    // #[cfg(not(debug_assertions))]
-    // fn async_commands(&mut self) -> AsyncCommands<'_, '_, '_> {
-    //     AsyncCommands(Some(self.reborrow()), None, PhantomData::default())
-    // }
-    // #[cfg(debug_assertions)]
-    // fn async_commands<'ns, 'aw>(&mut self) -> AsyncCommands<'w, 'ns, 'aw> where 's: 'ns, 'w: 'aw {
-    //     AsyncCommands(Some(self.reborrow()), None, Arc::new(AtomicBool::new(false)), PhantomData::default())
-    // }
-    #[cfg(not(debug_assertions))]
-    fn async_commands(self) -> AsyncCommands<'w, 's, 's> {
-        AsyncCommands(Some(self.reborrow()), None, PhantomData::default())
-    }
-    #[cfg(debug_assertions)]
-    fn async_commands(self) -> AsyncCommands<'w, 's, 's> {
-        AsyncCommands(Some(self), None, Arc::default(), PhantomData::default())
+    fn async_commands<'s_1>(mut self) -> impl Future<Output=AsyncCommands<'static, 's_1>> + Send {
+        let task = self.async_world();
+        AsyncComputeTaskPool::get().spawn(async move {
+            let mut w = task.await;
+            w.commands().await
+        })
     }
 }
  
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use bevy::MinimalPlugins;
     use bevy_app::App;
     use bevy_async_ecs::AsyncWorld;
-    use bevy_ecs::{system::Commands, world::FromWorld};
+    use bevy_ecs::{component::Component, system::Commands, world::FromWorld};
     use bevy_tasks::AsyncComputeTaskPool;
     use crate::{AsyncWorldCommandExt, BevyAsyncCommandsPlugin, AsyncCommandsExt};
+
+    #[derive(Component, Clone, Copy)]
+    pub struct EntityPush(i32);
 
     fn test_system() {
         println!("rocking");
     }
 
-    fn test_async_system(c: Commands) {
-        let mut async_commands = c.async_commands();
+    fn test_async_system(mut c: Commands) {
+        let async_world = c.async_world();
         AsyncComputeTaskPool::get().spawn(async move {
-            async_commands.run_system_cached(test_system);
+            let mut world = async_world.await;
+            let mut c= world.commands().await;
+            c.spawn((EntityPush(42),));
+            println!("command pushed");
         }).detach();
     }
 
@@ -198,14 +196,17 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, BevyAsyncCommandsPlugin));
         let mut async_world = AsyncWorld::from_world(app.world_mut());
-        let (s,r) = async_channel::bounded(1);
         AsyncComputeTaskPool::get().spawn(async move {
             let mut commands = async_world.commands().await;
             commands.run_system_cached(test_system);
-            s.send(()).await.unwrap();
+            commands.run_system_cached(test_async_system);
         }).detach();
-        while r.try_recv().is_err() {
+        let d = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
+        while Instant::now() < d {
             app.update();
         }
+        let mut data = app.world_mut().query::<&EntityPush>();
+        let r = data.single(app.world()).unwrap();
+        println!("{}",r.0);
     }
 }
