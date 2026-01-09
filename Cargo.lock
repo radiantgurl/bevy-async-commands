@@ -325,7 +325,7 @@ dependencies = [
 
 [[package]]
 name = "bevy-async-commands"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "async-channel",
  "bevy",

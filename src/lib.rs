@@ -98,7 +98,7 @@ trait AsyncWorldCommandExtInternal: Send + Sync {
     ) -> impl Future<Output = AsyncCommands<'w, 's>> + Send;
 }
 
-/// Use this to extend the methods on the [`AsyncWorld`](https://docs.rs/bevy-async-ecs/latest/bevy_async_ecs/struct.AsyncWorld.html) money.
+/// Use this to extend the methods on the [`AsyncWorld`](https://docs.rs/bevy-async-ecs/latest/bevy_async_ecs/struct.AsyncWorld.html).
 pub trait AsyncWorldCommandExt: Send + Sync {
     /// Request an [`AsyncCommands`](https://docs.rs/bevy-async-commands/latest/bevy_async_commands/struct.AsyncCommands.html) instance. This will fetch a [`Commands`](https://docs.rs/bevy_ecs/latest/bevy_ecs/system/struct.Commands.html) instance, freezing the main thread while it exists.
     fn commands<'w: 's, 's>(&mut self) -> impl Future<Output = AsyncCommands<'w, 's>> + Send;
