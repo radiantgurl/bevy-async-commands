@@ -1,15 +1,17 @@
 [package]
 name = "bevy-async-commands"
-version = "0.1.0"
+description = "Asychronous Commands context for Bevy Game Engine"
+license = "MIT OR Apache-2.0"
+version = "0.1.1"
 edition = "2024"
 
 [dependencies]
 async-channel = "2.5.0"
-bevy-async-ecs = "0.9.0"
-bevy_app = "0.17.3"
-bevy_ecs = "0.17.3"
-bevy_tasks = "0.17.3"
+bevy-async-ecs = "^0.9"
+bevy_app = "^0.17"
+bevy_ecs = "^0.17"
+bevy_tasks = "^0.17"
 event-listener-strategy = "0.5.4"
 
 [dev-dependencies]
-bevy = "0.17.3"
+bevy = "^0.17"
