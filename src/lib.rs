@@ -1,3 +1,11 @@
+#![warn(missing_docs)]
+
+//! Bevy Asynchronous Command Execution
+//! 
+//! Allows having raw access to the Commands instance by pausing the main thread whenever it is requested from AsyncWorld.
+//! 
+//! [b]Note:[/b] Requesting it from Commands directly will return a Future that can be awaited. This will pause the main thread in the background while it's being used by the async context.
+
 #[cfg(debug_assertions)]
 use std::sync::{Arc, atomic::AtomicBool};
 
@@ -9,14 +17,18 @@ use bevy_ecs::{resource::Resource, system::Commands, world::{FromWorld, World}};
 use bevy_tasks::{AsyncComputeTaskPool, Task, futures::check_ready, tick_global_task_pools_on_main_thread};
 use event_listener_strategy::event_listener::Event;
 
+/// The main entry point of this crate. Adding this plugin adds the [AsyncEcsPlugin](https://docs.rs/bevy-async-ecs/latest/bevy_async_ecs/struct.AsyncEcsPlugin.html) as well.
 #[derive(Clone, Copy)]
 pub struct BevyAsyncCommandsPlugin;
 
+/// An AsyncWorld instance that can be freely cloned and reused.
 #[derive(Resource, Clone)]
 pub struct BevyAsyncWorld(pub AsyncWorld);
 
+/// Async Commands. Derefing this results in a Commands. Do note the main thread is frozen while this exists.
 #[cfg(not(debug_assertions))]
 pub struct AsyncCommands<'w: 's, 's>(Option<Commands<'w, 's>>, Option<Event>);
+/// Async Commands. Derefing this results in a Commands. Do note the main thread is frozen while this exists.
 #[cfg(debug_assertions)]
 pub struct AsyncCommands<'w: 's, 's>(Option<Commands<'w, 's>>, Option<Event>, Arc<AtomicBool>);
 
@@ -69,7 +81,9 @@ trait AsyncWorldCommandExtInternal: Send + Sync {
     fn commands_internal<'w: 's, 's>(&mut self) -> impl Future<Output = AsyncCommands<'w, 's>> + Send;
 }
 
+/// Use this to extend the methods on the [AsyncWorld](https://docs.rs/bevy-async-ecs/latest/bevy_async_ecs/struct.AsyncWorld.html) money.
 pub trait AsyncWorldCommandExt: Send + Sync {
+    /// Request an [AsyncCommands](https://docs.rs/bevy-async-commands/0.1.2/bevy_async_commands/struct.AsyncCommands.html) instance. This will fetch a Commands instance, freezing the main thread while it exists.
     fn commands<'w: 's, 's>(&mut self) -> impl Future<Output = AsyncCommands<'w, 's>> + Send;
 }
 
@@ -138,9 +152,11 @@ impl AsyncWorldCommandExt for AsyncWorld {
         self.commands_internal()
     }
 }
-
+/// Use this to acquire an async context from [Commands](https://docs.rs/bevy_ecs/latest/bevy_ecs/system/struct.Commands.html)
 pub trait AsyncCommandsExt: Send + Sync {
+    /// Request an [AsyncWorld](https://docs.rs/bevy-async-ecs/latest/bevy_async_ecs/struct.AsyncWorld.html) instance. This will not pause the main thread.
     fn async_world(&mut self) -> Task<AsyncWorld>;
+    /// Request an [AsyncCommands](https://docs.rs/bevy-async-commands/0.1.2/bevy_async_commands/struct.AsyncCommands.html) instance. This will fetch a Commands instance, freezing the main thread while it exists.
     fn async_commands<'s>(self) -> impl Future<Output=AsyncCommands<'static, 's>> + Send;
 }
 
