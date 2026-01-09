@@ -1,41 +1,56 @@
 #![warn(missing_docs)]
 
 //! Bevy Asynchronous Command Execution
-//! 
-//! Allows having raw access to the Commands instance by pausing the main thread whenever it is requested from AsyncWorld.
-//! 
-//! [b]Note:[/b] Requesting it from Commands directly will return a Future that can be awaited. This will pause the main thread in the background while it's being used by the async context.
+//!
+//! Allows having raw access to the [`Commands`](https://docs.rs/bevy_ecs/latest/bevy_ecs/system/struct.Commands.html) instance by pausing the main thread whenever it is requested from [`AsyncWorld`](https://docs.rs/bevy-async-ecs/latest/bevy_async_ecs/struct.AsyncWorld.html).
 
 #[cfg(debug_assertions)]
 use std::sync::{Arc, atomic::AtomicBool};
 
-use std::{future::Future, mem::transmute, ops::{Deref, DerefMut}};
+use std::{
+    future::Future,
+    mem::transmute,
+    ops::{Deref, DerefMut},
+};
 
 use bevy_app::{App, Plugin};
 use bevy_async_ecs::{AsyncEcsPlugin, AsyncWorld};
-use bevy_ecs::{resource::Resource, system::Commands, world::{FromWorld, World}};
-use bevy_tasks::{AsyncComputeTaskPool, Task, futures::check_ready, tick_global_task_pools_on_main_thread};
+use bevy_ecs::{
+    resource::Resource,
+    system::Commands,
+    world::{FromWorld, World},
+};
+use bevy_tasks::{
+    AsyncComputeTaskPool, Task, futures::check_ready, tick_global_task_pools_on_main_thread,
+};
 use event_listener_strategy::event_listener::Event;
 
-/// The main entry point of this crate. Adding this plugin adds the [AsyncEcsPlugin](https://docs.rs/bevy-async-ecs/latest/bevy_async_ecs/struct.AsyncEcsPlugin.html) as well.
+/// The crate prelude
+pub mod prelude {
+    pub use crate::{
+        AsyncCommands, AsyncCommandsExt, AsyncWorldCommandExt, BevyAsyncCommandsPlugin,
+    };
+}
+
+/// The main entry point of this crate. Adding this plugin adds the [`AsyncEcsPlugin`](https://docs.rs/bevy-async-ecs/latest/bevy_async_ecs/struct.AsyncEcsPlugin.html) as well.
 #[derive(Clone, Copy)]
 pub struct BevyAsyncCommandsPlugin;
 
-/// An AsyncWorld instance that can be freely cloned and reused.
+/// An [`AsyncWorld`](https://docs.rs/bevy-async-ecs/latest/bevy_async_ecs/struct.AsyncWorld.html) instance that can be freely cloned and reused.
 #[derive(Resource, Clone)]
 pub struct BevyAsyncWorld(pub AsyncWorld);
 
-/// Async Commands. Derefing this results in a Commands. Do note the main thread is frozen while this exists.
+/// Async Commands. Derefing this results in a [`Commands`](https://docs.rs/bevy_ecs/latest/bevy_ecs/system/struct.Commands.html) instance. Do note the main thread is frozen while this exists.
 #[cfg(not(debug_assertions))]
 pub struct AsyncCommands<'w: 's, 's>(Option<Commands<'w, 's>>, Option<Event>);
-/// Async Commands. Derefing this results in a Commands. Do note the main thread is frozen while this exists.
+/// Async Commands. Derefing this results in a [`Commands`](https://docs.rs/bevy_ecs/latest/bevy_ecs/system/struct.Commands.html) instance. Do note the main thread is frozen while this exists.
 #[cfg(debug_assertions)]
 pub struct AsyncCommands<'w: 's, 's>(Option<Commands<'w, 's>>, Option<Event>, Arc<AtomicBool>);
 
 impl Plugin for BevyAsyncCommandsPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(AsyncEcsPlugin);
-        
+
         let async_world = AsyncWorld::from_world(app.world_mut());
         app.insert_resource(BevyAsyncWorld(async_world));
     }
@@ -78,19 +93,21 @@ impl<'w, 's> Drop for AsyncCommands<'w, 's> {
 }
 
 trait AsyncWorldCommandExtInternal: Send + Sync {
-    fn commands_internal<'w: 's, 's>(&mut self) -> impl Future<Output = AsyncCommands<'w, 's>> + Send;
+    fn commands_internal<'w: 's, 's>(
+        &mut self,
+    ) -> impl Future<Output = AsyncCommands<'w, 's>> + Send;
 }
 
-/// Use this to extend the methods on the [AsyncWorld](https://docs.rs/bevy-async-ecs/latest/bevy_async_ecs/struct.AsyncWorld.html) money.
+/// Use this to extend the methods on the [`AsyncWorld`](https://docs.rs/bevy-async-ecs/latest/bevy_async_ecs/struct.AsyncWorld.html) money.
 pub trait AsyncWorldCommandExt: Send + Sync {
-    /// Request an [AsyncCommands](https://docs.rs/bevy-async-commands/0.1.2/bevy_async_commands/struct.AsyncCommands.html) instance. This will fetch a Commands instance, freezing the main thread while it exists.
+    /// Request an [`AsyncCommands`](https://docs.rs/bevy-async-commands/latest/bevy_async_commands/struct.AsyncCommands.html) instance. This will fetch a [`Commands`](https://docs.rs/bevy_ecs/latest/bevy_ecs/system/struct.Commands.html) instance, freezing the main thread while it exists.
     fn commands<'w: 's, 's>(&mut self) -> impl Future<Output = AsyncCommands<'w, 's>> + Send;
 }
 
 #[cfg(not(debug_assertions))]
 impl AsyncWorldCommandExtInternal for AsyncWorld {
     async fn commands_internal<'w: 's, 's>(&mut self) -> AsyncCommands<'w, 's> {
-        let (s,r) = async_channel::bounded(1);
+        let (s, r) = async_channel::bounded(1);
         let ev = Event::new();
         let mut listener = ev.listen();
 
@@ -99,15 +116,16 @@ impl AsyncWorldCommandExtInternal for AsyncWorld {
 
             // SAFETY: We are awaiting on the event listener to drop the reference.
             unsafe {
-                s.try_send(transmute::<_, Commands<'static, 'static>>(c)).unwrap();
+                s.try_send(transmute::<_, Commands<'static, 'static>>(c))
+                    .unwrap();
             }
 
             while check_ready(&mut listener).is_none() {
                 tick_global_task_pools_on_main_thread();
             }
             // By this point, the AsyncCommands that had access to the commands has been deleted.
-
-        }).await;
+        })
+        .await;
         let commands: Commands<'w, 's> = r.recv().await.unwrap();
         AsyncCommands::<'_, '_>(Some(commands), Some(ev))
     }
@@ -118,7 +136,7 @@ impl AsyncWorldCommandExtInternal for AsyncWorld {
     async fn commands_internal<'w: 's, 's>(&mut self) -> AsyncCommands<'w, 's> {
         use std::sync::atomic::Ordering::Relaxed;
 
-        let (s,r) = async_channel::bounded(1);
+        let (s, r) = async_channel::bounded(1);
 
         let ev = Event::new();
         let mut listener = ev.listen();
@@ -131,7 +149,8 @@ impl AsyncWorldCommandExtInternal for AsyncWorld {
 
             // SAFETY: We are awaiting on the event listener to drop the reference.
             unsafe {
-                s.try_send(transmute::<_, Commands<'static, 'static>>(c)).unwrap();
+                s.try_send(transmute::<_, Commands<'static, 'static>>(c))
+                    .unwrap();
             }
 
             while check_ready(&mut listener).is_none() {
@@ -139,9 +158,12 @@ impl AsyncWorldCommandExtInternal for AsyncWorld {
             }
             // By this point, the AsyncCommands that had access to the commands has been deleted.
 
-            assert!(flag_clone.load(Relaxed), "reference not dropped after signalling");
-
-        }).await;
+            assert!(
+                flag_clone.load(Relaxed),
+                "reference not dropped after signalling"
+            );
+        })
+        .await;
         let commands: Commands<'w, 's> = r.recv().await.unwrap();
         AsyncCommands::<'_, '_>(Some(commands), Some(ev), flag)
     }
@@ -152,25 +174,24 @@ impl AsyncWorldCommandExt for AsyncWorld {
         self.commands_internal()
     }
 }
-/// Use this to acquire an async context from [Commands](https://docs.rs/bevy_ecs/latest/bevy_ecs/system/struct.Commands.html)
+/// Use this to acquire an async context from [`Commands`](https://docs.rs/bevy_ecs/latest/bevy_ecs/system/struct.Commands.html)
 pub trait AsyncCommandsExt: Send + Sync {
-    /// Request an [AsyncWorld](https://docs.rs/bevy-async-ecs/latest/bevy_async_ecs/struct.AsyncWorld.html) instance. This will not pause the main thread.
+    /// Request an [`AsyncWorld`](https://docs.rs/bevy-async-ecs/latest/bevy_async_ecs/struct.AsyncWorld.html) instance. This will not pause the main thread.
     fn async_world(&mut self) -> Task<AsyncWorld>;
-    /// Request an [AsyncCommands](https://docs.rs/bevy-async-commands/0.1.2/bevy_async_commands/struct.AsyncCommands.html) instance. This will fetch a Commands instance, freezing the main thread while it exists.
-    fn async_commands<'s>(self) -> impl Future<Output=AsyncCommands<'static, 's>> + Send;
+    /// Request an [`AsyncCommands`](https://docs.rs/bevy-async-commands/latest/bevy_async_commands/struct.AsyncCommands.html) instance. This will fetch a [`Commands`](https://docs.rs/bevy_ecs/latest/bevy_ecs/system/struct.Commands.html) instance, freezing the main thread while it exists.
+    fn async_commands<'s>(self) -> impl Future<Output = AsyncCommands<'static, 's>> + Send;
 }
 
 impl<'w, 's> AsyncCommandsExt for Commands<'w, 's> {
     fn async_world(&mut self) -> Task<AsyncWorld> {
         let (s, r) = async_channel::bounded(1);
         self.queue(move |w: &mut World| {
-            s.try_send(w.resource::<BevyAsyncWorld>().0.clone()).unwrap();
+            s.try_send(w.resource::<BevyAsyncWorld>().0.clone())
+                .unwrap();
         });
-        AsyncComputeTaskPool::get().spawn(async move {
-            r.recv().await.unwrap()
-        })
+        AsyncComputeTaskPool::get().spawn(async move { r.recv().await.unwrap() })
     }
-    fn async_commands<'s_1>(mut self) -> impl Future<Output=AsyncCommands<'static, 's_1>> + Send {
+    fn async_commands<'s_1>(mut self) -> impl Future<Output = AsyncCommands<'static, 's_1>> + Send {
         let task = self.async_world();
         AsyncComputeTaskPool::get().spawn(async move {
             let mut w = task.await;
@@ -178,17 +199,17 @@ impl<'w, 's> AsyncCommandsExt for Commands<'w, 's> {
         })
     }
 }
- 
+
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
 
+    use crate::{AsyncCommandsExt, AsyncWorldCommandExt, BevyAsyncCommandsPlugin};
     use bevy::MinimalPlugins;
     use bevy_app::App;
     use bevy_async_ecs::AsyncWorld;
     use bevy_ecs::{component::Component, system::Commands, world::FromWorld};
     use bevy_tasks::AsyncComputeTaskPool;
-    use crate::{AsyncWorldCommandExt, BevyAsyncCommandsPlugin, AsyncCommandsExt};
 
     #[derive(Component, Clone, Copy)]
     pub struct EntityPush(i32);
@@ -199,12 +220,14 @@ mod tests {
 
     fn test_async_system(mut c: Commands) {
         let async_world = c.async_world();
-        AsyncComputeTaskPool::get().spawn(async move {
-            let mut world = async_world.await;
-            let mut c= world.commands().await;
-            c.spawn((EntityPush(42),));
-            println!("command pushed");
-        }).detach();
+        AsyncComputeTaskPool::get()
+            .spawn(async move {
+                let mut world = async_world.await;
+                let mut c = world.commands().await;
+                c.spawn((EntityPush(42),));
+                println!("command pushed");
+            })
+            .detach();
     }
 
     #[test]
@@ -212,17 +235,19 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, BevyAsyncCommandsPlugin));
         let mut async_world = AsyncWorld::from_world(app.world_mut());
-        AsyncComputeTaskPool::get().spawn(async move {
-            let mut commands = async_world.commands().await;
-            commands.run_system_cached(test_system);
-            commands.run_system_cached(test_async_system);
-        }).detach();
+        AsyncComputeTaskPool::get()
+            .spawn(async move {
+                let mut commands = async_world.commands().await;
+                commands.run_system_cached(test_system);
+                commands.run_system_cached(test_async_system);
+            })
+            .detach();
         let d = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
         while Instant::now() < d {
             app.update();
         }
         let mut data = app.world_mut().query::<&EntityPush>();
         let r = data.single(app.world()).unwrap();
-        println!("{}",r.0);
+        println!("{}", r.0);
     }
 }
