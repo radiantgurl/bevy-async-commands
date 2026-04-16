@@ -14,14 +14,14 @@ use std::{
 };
 
 use async_channel::bounded;
-use bevy_app::{App, Plugin};
+use bevy::app::{App, Plugin};
 use bevy_async_ecs::{AsyncEcsPlugin, AsyncWorld};
-use bevy_ecs::{
+use bevy::ecs::{
     resource::Resource,
     system::{Command, Commands},
     world::{FromWorld, World},
 };
-use bevy_tasks::{
+use bevy::tasks::{
     AsyncComputeTaskPool, Task, futures::check_ready, tick_global_task_pools_on_main_thread
 };
 use event_listener_strategy::event_listener::Event;
@@ -220,10 +220,10 @@ mod tests {
 
     use crate::{AsyncCommandsExt, AsyncWorldCommandExt, BevyAsyncCommandsPlugin};
     use bevy::MinimalPlugins;
-    use bevy_app::App;
+    use bevy::app::App;
     use bevy_async_ecs::AsyncWorld;
-    use bevy_ecs::{component::Component, system::Commands, world::{FromWorld, World}};
-    use bevy_tasks::AsyncComputeTaskPool;
+    use bevy::ecs::{component::Component, system::Commands, world::{FromWorld, World}};
+    use bevy::tasks::AsyncComputeTaskPool;
 
     #[derive(Component, Clone, Copy)]
     pub struct EntityPush(i32);
