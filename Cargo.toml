@@ -2,15 +2,15 @@
 name = "bevy-async-commands"
 description = "Asychronous Commands context for Bevy Game Engine"
 license = "MIT OR Apache-2.0"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 git = "https://github.com/radiantgurl/bevy-async-commands.git"
 
 [dependencies]
-async-channel = "2.5.0"
-bevy-async-ecs = "0.10.0"
+async-channel = "^2.5"
+bevy-async-ecs = "^0.10"
 bevy = "^0.18"
-event-listener-strategy = "0.5.4"
+event-listener-strategy = "^0.5"
 
 [dev-dependencies]
 bevy = "^0.18"
