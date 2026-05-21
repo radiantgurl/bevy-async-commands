@@ -109,7 +109,7 @@ pub trait AsyncWorldCommandExt: Send + Sync {
 
 #[cfg(not(debug_assertions))]
 impl AsyncWorldCommandExtInternal for AsyncWorld {
-    async fn commands_internal<'w: 's, 's>(&mut self) -> AsyncCommands<'w, 's> {
+    async fn commands_internal<'w: 's, 's>(&self) -> AsyncCommands<'w, 's> {
         let (s, r) = async_channel::bounded(1);
         let ev = Event::new();
         let mut listener = ev.listen();
